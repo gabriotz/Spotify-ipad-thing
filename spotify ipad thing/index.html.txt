@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Painel Spotify + Relógio</title>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      background: url('https://i.pinimg.com/originals/09/94/38/099438695ab195516333aec7f6a268bf.gif') no-repeat center center fixed;
+      background-size: cover;
+      font-family: 'Segoe UI', sans-serif;
+      color: white;
+      text-align: center;
+      text-shadow: 2px 2px 6px black;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #clock {
+      font-size: 100px;
+      margin-bottom: 30px;
+    }
+
+    #spotify {
+      background: rgba(0, 0, 0, 0.6);
+      padding: 20px;
+      border-radius: 20px;
+      max-width: 80%;
+    }
+
+    #track {
+      font-size: 24px;
+      margin-bottom: 10px;
+    }
+
+    .controls button {
+      font-size: 20px;
+      margin: 0 10px;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 10px;
+      background: #1db954;
+      color: white;
+      cursor: pointer;
+    }
+
+    .controls button:hover {
+      background: #14833b;
+    }
+
+    #loginBtn {
+      margin-top: 20px;
+      background: #1db954;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="clock">00:00</div>
+
+  <div id="spotify">
+    <div id="track">Nenhuma música tocando</div>
+    <div class="controls">
+      <button onclick="prev()">⏮️ Anterior</button>
+      <button onclick="togglePlay()">▶️ Play/Pause</button>
+      <button onclick="next()">⏭️ Próxima</button>
+    </div>
+  </div>
+
+  <script>
+    // Configurações do Spotify - SUBSTITUA COM SEUS DADOS!
+    const clientId = 'SEU_CLIENT_ID_AQUI';
+    const redirectUri = 'https://SEU_USUARIO.github.io/SEU_REPOSITORIO/'; // Ex: https://john.github.io/spotify-panel/
+    let accessToken = null;
+    let deviceId = null;
+    let player;
+
+    // Atualizar relógio
+    function updateClock() {
+      const now = new Date();
+      const hh = now.getHours().toString().padStart(2, '0');
+      const mm = now.getMinutes().toString().padStart(2, '0');
+      document.getElementById('clock').textContent = `${hh}:${mm}`;
+    }
+
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Verificar token na URL após redirecionamento
+    function checkForAccessToken() {
+      const hash = window.location.hash.substring(1);
+      const params = new URLSearchParams(hash);
+      
+      if (params.has('access_token')) {
+        accessToken = params.get('access_token');
+        const expiresIn = parseInt(params.get('expires_in')) * 1000;
+        window.history.pushState({}, document.title, window.location.pathname);
+        
+        // Token expira após o tempo definido
+        setTimeout(() => {
+          accessToken = null;
+          alert('Sessão expirada. Por favor, faça login novamente.');
+        }, expiresIn);
+        
+        initializePlayer();
+      }
+    }
+
+    // Autenticação com Spotify
+    function authenticateSpotify() {
+      const scopes = [
+        'user-read-playback-state',
+        'user-modify-playback-state',
+        'user-read-currently-playing'
+      ];
+      
+      window.location.href = `https://accounts.spotify.com/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes.join('%20')}&response_type=token&show_dialog=true`;
+    }
+
+    // Inicializar player do Spotify
+    function initializePlayer() {
+      const script = document.createElement('script');
+      script.src = 'https://sdk.scdn.co/spotify-player.js';
+      script.onload = () => {
+        window.onSpotifyWebPlaybackSDKReady = () => {
+          player = new Spotify.Player({
+            name: 'Painel Spotify Web',
+            getOAuthToken: cb => { cb(accessToken); },
+            volume: 0.5
+          });
+
+          player.addListener('ready', ({ device_id }) => {
+            deviceId = device_id;
+            console.log('Dispositivo pronto com ID:', device_id);
+            transferPlayback(device_id);
+          });
+
+          player.addListener('player_state_changed', state => {
+            if (state) {
+              updateTrackInfo(state.track_window.current_track);
+            }
+          });
+
+          player.addListener('initialization_error', ({ message }) => {
+            console.error('Erro de inicialização:', message);
+          });
+
+          player.addListener('authentication_error', ({ message }) => {
+            console.error('Erro de autenticação:', message);
+          });
+
+          player.addListener('account_error', ({ message }) => {
+            console.error('Erro de conta:', message);
+          });
+
+          player.connect().then(success => {
+            if (success) {
+              console.log('Player conectado com sucesso!');
+            }
+          });
+        };
+      };
+      document.body.appendChild(script);
+    }
+
+    // Transferir reprodução para este dispositivo
+    function transferPlayback(deviceId) {
+      fetch('https://api.spotify.com/v1/me/player', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          device_ids: [deviceId],
+          play: true
+        })
+      }).catch(error => console.error('Erro ao transferir playback:', error));
+    }
+
+    // Atualizar informações da faixa
+    function updateTrackInfo(track) {
+      document.getElementById('track').innerHTML = `
+        <strong>Tocando agora:</strong><br>
+        ${track.name}<br>
+        <small>${track.artists.map(a => a.name).join(', ')}</small>
+      `;
+    }
+
+    // Controles do player
+    async function togglePlay() {
+      if (!accessToken) {
+        authenticateSpotify();
+        return;
+      }
+      
+      try {
+        const response = await fetch('https://api.spotify.com/v1/me/player', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (!response.ok) throw new Error('Erro ao verificar estado');
+        
+        const data = await response.json();
+        const isPlaying = data.is_playing;
+        
+        await fetch(`https://api.spotify.com/v1/me/player/${isPlaying ? 'pause' : 'play'}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            device_id: deviceId
+          })
+        });
+      } catch (error) {
+        console.error('Erro ao alternar play/pause:', error);
+      }
+    }
+
+    async function next() {
+      if (!accessToken) {
+        authenticateSpotify();
+        return;
+      }
+      
+      try {
+        await fetch('https://api.spotify.com/v1/me/player/next', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            device_id: deviceId
+          })
+        });
+      } catch (error) {
+        console.error('Erro ao pular para próxima faixa:', error);
+      }
+    }
+
+    async function prev() {
+      if (!accessToken) {
+        authenticateSpotify();
+        return;
+      }
+      
+      try {
+        await fetch('https://api.spotify.com/v1/me/player/previous', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            device_id: deviceId
+          })
+        });
+      } catch (error) {
+        console.error('Erro ao voltar para faixa anterior:', error);
+      }
+    }
+
+    // Verificar autenticação ao carregar a página
+    window.onload = function() {
+      checkForAccessToken();
+      
+      // Adicionar botão de login se não estiver autenticado
+      if (!accessToken) {
+        const loginBtn = document.createElement('button');
+        loginBtn.id = 'loginBtn';
+        loginBtn.textContent = 'Login com Spotify';
+        loginBtn.onclick = authenticateSpotify;
+        document.querySelector('.controls').appendChild(loginBtn);
+      }
+    };
+  </script>
+</body>
+</html>
